@@ -1,5 +1,7 @@
 #include "include/TutorialApplication.hh"
 #include "TH1.h"
+#include "TFitResult.h"
+#include "TF1.h"
 #include "TCanvas.h"
 #include "TVector3.h"
 #include "TRandom.h"
@@ -23,8 +25,8 @@ TH1F *hlayer3 = new TH1F("hlayer3","layer3;z [cm]; counts",100/0.0150,-50,50);
 TH1F *hresid1 = new TH1F("hresid1","resid1; z_{hit}-z_{true} [cm]; events",100,-0.1,0.1);
 TH1F *hresid2 = new TH1F("hresid2","resid2; z_{hit}-z_{true} [cm]; events",100,-0.1,0.1);
 TH1F *hresid3 = new TH1F("hresid3","resid3; z_{hit}-z_{true} [cm]; events",100,-0.1,0.1);
-TH1F *hpt = new TH1F("hpt","; p_{T} [GeV]",100,0,10);
-TH1F *hptpull = new TH1F("hptpull","; (p_{T}^{meas} - p_{T}^{true})/#sigma",100,-10,10);
+TH1F *hpt = new TH1F("hpt","; p_{T} [GeV]",200,4,6);
+TH1F *hptpull = new TH1F("hptpull","; (p_{T}^{meas} - p_{T}^{true})/#sigma",100,-8,8);
 
 class Cluster : public TVector3 {
 public:
@@ -61,41 +63,73 @@ private:
 
 class Track {
 public:
-  Track(double R, double x0, double z0) :
-    fR(R), fX0(x0), fZ0(z0),fCov(3) {}
+  // Track(double R, double x0, double z0) :
+  //   fR(R), fX0(x0), fZ0(z0),fCov(3) {}
+  Track(double C, double D0, double Phi0) :
+    fC(C), fPhi0(Phi0), fD0(D0), fCov(3) {}
   
   THelix* helix() const;
   
-  int charge() const { return fR > 0 ? 1 : -1;}
-  double r() const { return std::abs(fR);}
-  double x0() const { return fX0;}
-  double z0() const { return fZ0;}
-  double phi0() const { return 0;}
-  
+  int charge() const { return fC > 0 ? 1 : -1;}
+  // double r() const { return std::abs(fR);}
+  // double x0() const { return fX0;}
+  // double z0() const { return fZ0;}
+  double d0() const { return fD0; }
+  double phi0() const { return fPhi0;} // meaning has changed!! this is the phase in the second parametrization
+  double curvature() const { return fC; }
+  double r() const { return 1/std::abs(fC); }
+  double x0() const {
+    return -(fD0 + this->charge()*this->r()) * std::sin(fPhi0) - 50;
+  }
+  double z0() const {
+    return (fD0 + this->charge()*this->r()) * std::cos(fPhi0);
+  }
 
+  double pt() const {
+    std::cout << std::endl << std::endl;
+    std::cout << "B = "  << this->B() << "; r = " << this->r() << "; pT = " << 0.29979 * this->charge() * this->B() * this->r()/100;
+    std::cout << std::endl << std::endl;
+    return 0.3 * this->B() * this->r()/100; 
+//    return 0.29979 * this->B() * this->r()/100; 
+  }//needs changes
 
-  double pt() const { return 0;}//needs changes
+//  double rErr() const { return sqrt(fCov(0,0));}
+  double rErr() const { return sqrt(fCov(0,0))/fC/fC;} // d(1/C) = dC/C^2
 
-  double rErr() const { return sqrt(fCov(0,0));}
-  double ptErr() const { return 1000;}//needs changes
+  double ptErr() const {
+    std::cout << std::endl << std::endl << "rErr" << this->rErr() << std::endl << std::endl;
+    double ptErr_stat = 0.3 * this->B() * this->rErr()/100;
+//    double ptErr_stat = 0.29979 * this->B() * this->rErr()/100;
+    // quadrature sum of statistical error and systematic error (uniform distribution in each strip)
+    return std::sqrt(ptErr_stat*ptErr_stat + 0.015*0.015/12);
+  }//needs changes
 
 
   double cov(int i, int j) const { return fCov(i,j);}
   
   void setParameters(double a, double b, double c) {
-    fR  = a;
-    fX0 = b;
-    fZ0 = c;
+    // fR  = a;
+    // fX0 = b;
+    // fZ0 = c;
+    fC  = a;
+    fPhi0 = b;
+    fD0 = c;
   }
   
   void setCov(int i, int j, double c) { fCov(i,j) = c;}
   
-  double x(double lambda) const { return 0;}//needs changes
-  double z(double lambda) const { return 0;}//needs changes
+//  double x(double lambda) const { return 0;}//needs changes
+//  double z(double lambda) const { return 0;}//needs changes
+  double x(double lambda) const {
+    return this->x0() + this->charge() * this->r() * std::sin(this->charge() * lambda + this->phi0());
+  }//needs changes
+  double z(double lambda) const {
+    return this->z0() - this->charge() * this->r() * std::cos(this->charge() * lambda + this->phi0());
+  }//needs changes
   double y(double) const { return 0; }
   
   double lambdaFromX(double posx) const { //needs changes
-    return 0;
+    return (std::asin((posx - this->x0()) / this->r() / this->charge()) - this->phi0()) / this->charge();
   }
 
   static double B() {
@@ -107,7 +141,8 @@ public:
   }
 
 private:
-  double fR, fX0, fZ0;
+  // double fR, fX0, fZ0;
+  double fC, fPhi0, fD0;
   TMatrixDSym fCov;
 };
 
@@ -142,7 +177,7 @@ unsigned char getSignal(const std::string& n)
   //add noise
   c += gRandom->Gaus(0,3);
   //noise cut
-  int noisecut = 0;
+  int noisecut = 20; //20
   if( c < noisecut ) return 0;
   if(c > 255) return 255;
   return c;
@@ -314,7 +349,7 @@ const std::vector<Cluster*> *gClusters;
 void fcn(Int_t &, Double_t *, Double_t &f, Double_t *par, Int_t) {
   //set new track parameters:
   gTrack->setParameters(par[0],par[1],par[2]);
-  //std::cout << "track: r,x0,z0 = " << fTrack->r() << ", " << fTrack->x0() << ", " << fTrack->z0() << '\n'; 
+//  std::cout << "track: r,x0,z0 = " << gTrack->r() << ", " << gTrack->x0() << ", " << gTrack->z0() << '\n'; 
   double chi2 = 0;
   for(unsigned int i = 0 ; i < gClusters->size() ; ++i) {
     Cluster* c = gClusters->at(i);
@@ -322,8 +357,8 @@ void fcn(Int_t &, Double_t *, Double_t &f, Double_t *par, Int_t) {
     double z = c->Z();
     double lambda = gTrack->lambdaFromX(x);
     
-    //std::cout << "hit:" << x << ", " << z << "   track:" << fTrack->x(lambda) << ", " << fTrack->z(lambda) 
-    //	      << "  lambda = " << lambda << '\n';
+//    std::cout << "hit:" << x << ", " << z << "   track:" << gTrack->x(lambda) << ", " << gTrack->z(lambda) 
+//    	      << "  lambda = " << lambda << '\n';
     
     double dZ = z - gTrack->z(lambda);
     double dX = x - gTrack->x(lambda);
@@ -331,22 +366,25 @@ void fcn(Int_t &, Double_t *, Double_t &f, Double_t *par, Int_t) {
   }
   //std::cout << "Chi2:  " << chi2 << '\n';
   f = chi2;
+
+  //std::cout << gTrack->r(); // to see how param converges; note that the last values stored in gTrack are the converged ones (set by fnc()!!)
 }
 
 
 Track* fitTrack(const std::vector<Cluster*>& clusters) {
-  gTrack = new Track(100,-50,100);
+  // gTrack = new Track(-100,-50,-100); //(100, -50, 100) // R, X0, Z0
+  gTrack = new Track(0.01, 0, 0); // C, D0, Phi0
   gClusters = &clusters;
   
   TMinuit * minuit = new TMinuit(3);
   
   minuit->SetFCN(&fcn);
-  //minuit->DefineParameter(0,"Curvature",gTrack->curvature(),0.00001,0,0);
-  //minuit->DefineParameter(1,"Phi0",gTrack->phi0(),0.001,0,0);
-  //minuit->DefineParameter(2,"D0",gTrack->d0(),0.1,0,0); 
-  minuit->DefineParameter(0,"R",(gTrack->charge() * gTrack->r()),1,0,0);
-  minuit->DefineParameter(1,"X0",gTrack->x0(),1,0,0);
-  minuit->DefineParameter(2,"Z0",gTrack->z0(),1,0,0);
+  minuit->DefineParameter(0,"Curvature",gTrack->curvature(),0.00001,0,0);
+  minuit->DefineParameter(1,"Phi0",gTrack->phi0(),0.001,0,0);
+  minuit->DefineParameter(2,"D0",gTrack->d0(),0.1,0,0); 
+  // minuit->DefineParameter(0,"R",(gTrack->charge() * gTrack->r()),1,0,0);
+  // minuit->DefineParameter(1,"X0",gTrack->x0(),1,0,0);
+  // minuit->DefineParameter(2,"Z0",gTrack->z0(),1,0,0);
   minuit->SetPrintLevel(1);
   int iret = minuit->Migrad();
   //minuit->PrintResults(1,0);
@@ -379,12 +417,12 @@ void tracking2()
 {
   TutorialApplication* app = (TutorialApplication*)TutorialApplication::Instance();
   // position of silicon layers in x   
-  double pos1 = -45.0;
-  double pos2 = -30.0;
-  double pos3 = 45.0; 
+  double pos1 = -45.0/3;
+  double pos2 = 0.0;
+  double pos3 = 45.0/3; 
   double pitch = 0.0150;
-  double materialLength = 0.05;//length of support structures
-  double Bfield = 2.0;//magnetic field in T
+  double materialLength = 0.01;//0,05  length of support structures
+  double Bfield = 6.0;//magnetic field in T
   TString geom("geometry/tracker2(");
   geom+=pos1; geom.Append(",");
   geom+=pos2; geom.Append(",");
@@ -394,12 +432,12 @@ void tracking2()
   geom+=Bfield; geom.Append(")"); 
   app->InitMC(geom); 
 
-  bool doFit = false;
+  bool doFit = true; // false
 
   // define particle and control parameters of loop   
-  unsigned int nevt = 1;
-  double p = 1.0;
-  app->SetPrimaryPDG(-13);    // +/-11: PDG code of e+/- 
+  unsigned int nevt = 500;//500;
+  double p = 5;
+  app->SetPrimaryPDG(13);    // +/-11: PDG code of e+/- 
   /* other PDG codes     22: Photon    +-13: muon   
                      +/-211: pion   +/-2212: proton     */
   app->SetPrimaryMomentum(p);
@@ -459,6 +497,28 @@ void tracking2()
     TCanvas* c2 = new TCanvas("c2");
     c2->Divide(2,1);
     c2->cd(1);
+
+//    ROOT::Fit::Result * res = hpt->Fit("gaus", "S");
+//    std::cout << res->Parameter(2) << std::endl;
+    
+//    TF1 *f1 = new TF1("f1", "[0]*exp((x-[1])*(x-[1])/[2]/[2]/2)", 0, 10);
+//    f1->SetParNames("Constant","Mean_value","Sigma");
+//    f1->SetParameter("Constant", 110);
+//    f1->SetParameter("Mean_value", 5);
+//    f1->SetParameter("Sigma", 0.04);
+//    hpt->Fit("f1");
+
+//    hpt->Fit("gaus", "", "", 4, 6);
+
+    TFitResultPtr res = hpt->Fit("gaus", "S", "", 4, 6); // a "smart pointer", that properly releases the memory allocated by the hpt->Fit result
+    std::cout << "sigma = " << res->Parameter(2) << std::endl;
+
+    // fails: segmentation error
+//    TF1 *fitres = hpt->GetFunction("gaus");
+//    std::cout << "p2 = " << double(fitres->GetParameter(2)) << std::endl;
+
+    hptpull->Fit("gaus", "", "",  -10, 10);
+
     hpt->Draw();
     c2->cd(2);
     hptpull->Draw();
